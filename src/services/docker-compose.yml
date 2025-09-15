@@ -1,0 +1,214 @@
+version: "3.8"
+
+services:
+
+    nginx-proxy:
+      image: nginx:1.29.0-alpine
+      ports:
+        - "8081:8081"
+        - "8087:8087"
+      volumes:
+        - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      networks:
+        - app-network
+      deploy:
+        placement:
+          constraints:
+            - node.hostname == manager01
+    
+    rabbitmq:
+      image: rabbitmq:3-management-alpine
+      ports:
+        - "15672:15672"
+      expose:
+        - "5672"
+      environment:
+        RABBITMQ_DEFAULT_USER: guest
+        RABBITMQ_DEFAULT_PASS: guest
+      healthcheck:
+        test: [ "CMD", "rabbitmq-diagnostics", "check_running" ]
+        interval: 10s
+        timeout: 5s
+        retries: 10
+      networks:
+      - app-network
+
+    postgres:
+        image: postgres:15-alpine
+        deploy:
+            mode: replicated
+            replicas: 1
+            restart_policy:
+                condition: on-failure
+                delay: 5s
+                max_attempts: 3
+            placement:
+                constraints:
+                    - node.hostname == manager01
+        environment:
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: postgres
+        expose:
+          - "5432"
+        volumes:
+            - postgres-data:/var/lib/postgresql/data
+            - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres -d users_db"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 10s
+        networks:
+            - app-network
+
+    session-service:
+        image: elpepoid/session:v1.0.0
+        deploy:
+            placement:
+                constraints:
+                    - node.hostname == manager01
+        depends_on:
+          - postgres
+        environment:
+          POSTGRES_HOST: postgres
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: users_db
+        networks:
+          - app-network
+
+    report-service:
+      image: elpepoid/report:v1.0.0
+      depends_on:
+        - postgres
+      environment:
+        POSTGRES_HOST: postgres
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: statistics_db
+        RABBIT_MQ_HOST: rabbitmq
+        RABBIT_MQ_PORT: 5672
+        RABBIT_MQ_USER: guest
+        RABBIT_MQ_PASSWORD: guest
+        RABBIT_MQ_QUEUE_NAME: messagequeue
+        RABBIT_MQ_EXCHANGE: messagequeue-exchange
+      expose:
+        - "8086"
+      networks:
+        - app-network
+
+    payment-service:
+      image: elpepoid/payment:v1.0.0
+      depends_on:
+        - postgres
+      environment:
+        POSTGRES_HOST: postgres
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: payments_db
+      expose:
+        - "8084"
+      networks:
+        - app-network
+
+    loyalty-service:
+      image: elpepoid/loyalty:v1.0.0
+      depends_on:
+        - postgres
+
+      environment:
+        POSTGRES_HOST: postgres
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: balances_db
+      expose:
+        - "8085"
+      networks:
+        - app-network
+
+    hotel-service:
+      image: elpepoid/hotel:v1.0.0
+      depends_on:
+        - postgres
+      environment:
+        POSTGRES_HOST: postgres
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: hotels_db
+      expose:
+        - "8082"
+      networks:
+        - app-network
+
+    gateway-service:
+      image: elpepoid/gateway:v1.0.0
+      deploy:
+        placement:
+          constraints:
+            - node.hostname == manager01
+      depends_on:
+        - session-service
+        - hotel-service
+        - booking-service
+        - loyalty-service
+        - report-service
+        - payment-service
+      environment:
+        SESSION_SERVICE_HOST: session-service
+        SESSION_SERVICE_PORT: 8081
+        HOTEL_SERVICE_HOST: hotel-service
+        HOTEL_SERVICE_PORT: 8082
+        BOOKING_SERVICE_HOST: booking-service
+        BOOKING_SERVICE_PORT: 8083
+        PAYMENT_SERVICE_HOST: payment-service
+        PAYMENT_SERVICE_PORT: 8084
+        LOYALTY_SERVICE_HOST: loyalty-service
+        LOYALTY_SERVICE_PORT: 8085
+        REPORT_SERVICE_HOST: report-service
+        REPORT_SERVICE_PORT: 8086
+      networks:
+        - app-network
+
+    booking-service:
+      image: elpepoid/booking:v1.0.0
+      depends_on:
+        - postgres
+        - rabbitmq
+        - hotel-service
+        - payment-service
+        - loyalty-service
+      environment:
+        POSTGRES_HOST: postgres
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: reservations_db
+        RABBIT_MQ_HOST: rabbitmq
+        RABBIT_MQ_PORT: 5672
+        RABBIT_MQ_USER: guest
+        RABBIT_MQ_PASSWORD: guest
+        RABBIT_MQ_QUEUE_NAME: messagequeue
+        RABBIT_MQ_EXCHANGE: messagequeue-exchange
+        HOTEL_SERVICE_HOST: hotel-service
+        HOTEL_SERVICE_PORT: 8082
+        PAYMENT_SERVICE_HOST: payment-service
+        PAYMENT_SERVICE_PORT: 8084
+        LOYALTY_SERVICE_HOST: loyalty-service
+        LOYALTY_SERVICE_PORT: 8085
+      expose:
+        - "8083"
+      networks:
+        - app-network
+volumes:
+  db:
+  postgres-data:
+
+networks:
+  app-network:
+    driver: overlay

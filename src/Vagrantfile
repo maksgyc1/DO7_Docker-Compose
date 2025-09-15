@@ -1,0 +1,44 @@
+# # -*- mode: ruby -*-
+# # vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.synced_folder ".", "/home/vagrant"
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = "2048"
+    vb.cpus = "2"
+  end
+
+  # Manager
+  config.vm.define "manager01" do |manager|
+      manager.vm.box = "generic/ubuntu2204"
+      manager.vm.hostname = "manager01"
+      manager.vm.network "private_network", ip: "192.168.56.10"
+      manager.vm.network "forwarded_port", guest: 8081, host: 8081
+      manager.vm.network "forwarded_port", guest: 8087, host: 8087
+      manager.vm.network "forwarded_port", guest: 9000, host: 9000
+      manager.vm.provision "shell", path: "services/scripts/install-docker.sh"
+      manager.vm.provision "shell", path: "services/scripts/manager-init.sh"
+
+
+  end
+
+  # Worker 1
+  config.vm.define "worker01" do |worker|
+      worker.vm.box = "generic/ubuntu2204"
+      worker.vm.hostname = "worker01"
+      worker.vm.network "private_network", ip: "192.168.56.11"
+      worker.vm.provision "shell", path: "services/scripts/install-docker.sh"
+      worker.vm.provision "shell", path: "services/scripts/worker-join.sh"
+
+  end
+
+  # Worker 2
+  config.vm.define "worker02" do |worker|
+      worker.vm.box = "generic/ubuntu2204"
+      worker.vm.hostname = "worker02"
+      worker.vm.network "private_network", ip: "192.168.56.12"
+      worker.vm.provision "shell", path: "services/scripts/install-docker.sh"
+      worker.vm.provision "shell", path: "services/scripts/worker-join.sh"
+
+  end
+end
